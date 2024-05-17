@@ -26,15 +26,15 @@ const ForwardRequest = [
 ];
 
 
-const getMetaTxTypeData = (chainId: string, verifyingContract: string) => {
+const getMetaTxTypeData = (chainId: string, verifyingContract: string, version712:string,domainName:string) => {
   return {
     types: {
       EIP712Domain,
       ForwardRequest,
     },
     domain: {
-      name: 'StableForwarder',
-      version: '1',
+      name: domainName,
+      version:version712,
       chainId,
       verifyingContract,
     },
@@ -48,20 +48,21 @@ const genMetaTxnCompleteReq = async (fromSigner: HardhatEthersSigner,
   encodedFnData: string,
   forwarderContractInstance,
   deadline: number
+  ,version712:string,domainName:string
 ) => {
 
   const from = await fromSigner.getAddress();
   const to = toAddress;
   const data = encodedFnData
-  const request = await signMetaTxRequest(fromSigner, forwarderContractInstance, { to, from, data, deadline });
+  const request = await signMetaTxRequest(fromSigner, forwarderContractInstance, { to, from, data, deadline },version712,domainName);
   return request;
 
 }
 
-const signMetaTxRequest = async (signer: HardhatEthersSigner, forwarder, input: Object) => {
+const signMetaTxRequest = async (signer: HardhatEthersSigner, forwarder, input: Object,version712:string,domainName:string) => {
 
   const request = await buildRequest(forwarder, input);
-  const toSign = await buildTypedData(forwarder, request);
+  const toSign = await buildTypedData(forwarder, request,version712,domainName);
   const signature = await signTypedData(signer, toSign);
   request.signature = signature
   return request;
@@ -72,11 +73,11 @@ const buildRequest = async (forwarder, input) => {
   return { value: 0n, gas: 1e6, nonce, ...input };
 }
 
-const buildTypedData = async (forwarder, request) => {
+const buildTypedData = async (forwarder, request, version712:string,domainName:string) => {
   const chainId = hre.network.config.chainId?.toString()
   if (!chainId)
     throw "chain id not defined"
-  const typeData = getMetaTxTypeData(chainId, await forwarder.getAddress());
+  const typeData = getMetaTxTypeData(chainId, await forwarder.getAddress(),version712,domainName);
   return { ...typeData, message: request };
 }
 
@@ -93,6 +94,8 @@ describe("Stable", function () {
   // We use loadFixture to run this setup once, snapshot that state,
   // and reset Hardhat Network to that snapshot in every test.
   async function deployFixture() {
+    const domainName = "StableForwarder"
+    const defVersion = "1"
     // const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
     // const ONE_GWEI = 1_000_000_000;
 
@@ -102,7 +105,7 @@ describe("Stable", function () {
     // Contracts are deployed using the first signer/account by default
     const [owner, otherAccount, relayer] = await hre.ethers.getSigners();
 
-    const Forwarder = await hre.ethers.getContractFactory("StableForwarder");
+    const Forwarder = await hre.ethers.getContractFactory(domainName);
     const forwarder = await Forwarder.deploy({ value: hre.ethers.parseEther("10") });
     await forwarder.waitForDeployment();
 
@@ -110,12 +113,12 @@ describe("Stable", function () {
     const coin = await Stable.deploy("Stable1", "ST1", await forwarder.getAddress());
     await coin.waitForDeployment();
 
-    return { forwarder, relayer, coin, owner, otherAccount };
+    return { forwarder, relayer, coin, owner, otherAccount,domainName,defVersion };
   }
 
   describe("metaTxn", function () {
     it("Should mint at the expense of relayer wallet", async function () {
-      const { coin, forwarder, owner, otherAccount, relayer } = await loadFixture(deployFixture);
+      const { coin, forwarder, owner, otherAccount, relayer,defVersion,domainName } = await loadFixture(deployFixture);
       const ONE_GWEI = 1_000_000_000;
       const mintAmt = ONE_GWEI;
       const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
@@ -130,14 +133,15 @@ describe("Stable", function () {
         await coin.getAddress(),
         data,
         forwarder,
-        validTime
+        validTime,defVersion,domainName
+
       ))
 
       expect(await coin.balanceOf(await otherAccount.getAddress())).to.equal(mintAmt);
     });
 
     it("Should not mint when owner isnt initiating", async function () {
-      const { coin, forwarder, owner, otherAccount, relayer } = await loadFixture(deployFixture);
+      const { coin, forwarder, owner, otherAccount, relayer,defVersion,domainName } = await loadFixture(deployFixture);
       const ONE_GWEI = 1_000_000_000;
       const mintAmt = ONE_GWEI;
       const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
@@ -152,14 +156,15 @@ describe("Stable", function () {
         await coin.getAddress(),
         data,
         forwarder,
-        validTime
+        validTime,
+        defVersion,domainName
       ))
 
       expect(failingMint).to.be.reverted;
     });
 
     it("Should transfer at the expense of relayer wallet", async function () {
-      const { coin, forwarder, owner, otherAccount, relayer } = await loadFixture(deployFixture);
+      const { coin, forwarder, owner, otherAccount, relayer,defVersion,domainName } = await loadFixture(deployFixture);
       const ONE_GWEI = 1_000_000_000;
       const mintAmt = ONE_GWEI;
       const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
@@ -175,7 +180,7 @@ describe("Stable", function () {
           await coin.getAddress(),
           data,
           forwarder,
-          validTime
+          validTime,defVersion,domainName
         ))
 
       expect(await coin.balanceOf(await otherAccount.getAddress())).to.equal(mintAmt);
@@ -187,7 +192,8 @@ describe("Stable", function () {
           await coin.getAddress(),
           dataTransfer,
           forwarder,
-          validTime
+          validTime,
+          defVersion,domainName
         ))
 
       expect(await coin.balanceOf(await relayer.getAddress())).to.equal(mintAmt);

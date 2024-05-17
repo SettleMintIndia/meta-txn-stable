@@ -5,6 +5,7 @@ import {
 import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { expect } from "chai";
 import hre from "hardhat";
+import { StableForwarder } from "../typechain-types";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 const EIP712Domain = [
@@ -42,7 +43,12 @@ const getMetaTxTypeData = (chainId: string, verifyingContract: string) => {
 };
 
 
-const genMetaTxnCompleteReq = async (fromSigner, toAddress, encodedFnData, forwarderContractInstance, deadline) => {
+const genMetaTxnCompleteReq = async (fromSigner: HardhatEthersSigner,
+  toAddress: string,
+  encodedFnData: string,
+  forwarderContractInstance,
+  deadline: number
+) => {
 
   const from = await fromSigner.getAddress();
   const to = toAddress;
@@ -52,7 +58,7 @@ const genMetaTxnCompleteReq = async (fromSigner, toAddress, encodedFnData, forwa
 
 }
 
-const signMetaTxRequest = async (signer, forwarder, input) => {
+const signMetaTxRequest = async (signer: HardhatEthersSigner, forwarder, input: Object) => {
 
   const request = await buildRequest(forwarder, input);
   const toSign = await buildTypedData(forwarder, request);
@@ -68,7 +74,7 @@ const buildRequest = async (forwarder, input) => {
 
 const buildTypedData = async (forwarder, request) => {
   const chainId = hre.network.config.chainId?.toString()
-  if(!chainId)
+  if (!chainId)
     throw "chain id not defined"
   const typeData = getMetaTxTypeData(chainId, await forwarder.getAddress());
   return { ...typeData, message: request };
@@ -120,7 +126,7 @@ describe("Stable", function () {
 
       const data = coin.interface.encodeFunctionData('mint', [otherAccount.address, mintAmt]);
       await forwarder.connect(relayer).execute(await genMetaTxnCompleteReq(
-        owner, 
+        owner,
         await coin.getAddress(),
         data,
         forwarder,
@@ -130,6 +136,62 @@ describe("Stable", function () {
       expect(await coin.balanceOf(await otherAccount.getAddress())).to.equal(mintAmt);
     });
 
+    it("Should not mint when owner isnt initiating", async function () {
+      const { coin, forwarder, owner, otherAccount, relayer } = await loadFixture(deployFixture);
+      const ONE_GWEI = 1_000_000_000;
+      const mintAmt = ONE_GWEI;
+      const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
+
+      const validTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+      expect(await coin.balanceOf(await otherAccount.getAddress())).to.equal(hre.ethers.parseEther("0"));
+
+
+      const data = coin.interface.encodeFunctionData('mint', [otherAccount.address, mintAmt]);
+      let failingMint = forwarder.connect(relayer).execute(await genMetaTxnCompleteReq(
+        otherAccount,
+        await coin.getAddress(),
+        data,
+        forwarder,
+        validTime
+      ))
+
+      expect(failingMint).to.be.reverted;
+    });
+
+    it("Should transfer at the expense of relayer wallet", async function () {
+      const { coin, forwarder, owner, otherAccount, relayer } = await loadFixture(deployFixture);
+      const ONE_GWEI = 1_000_000_000;
+      const mintAmt = ONE_GWEI;
+      const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
+
+      const validTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+      expect(await coin.balanceOf(await otherAccount.getAddress())).to.equal(hre.ethers.parseEther("0"));
+
+
+      const data = coin.interface.encodeFunctionData('mint', [otherAccount.address, mintAmt]);
+      await forwarder.connect(relayer).execute(
+        await genMetaTxnCompleteReq(
+          owner,
+          await coin.getAddress(),
+          data,
+          forwarder,
+          validTime
+        ))
+
+      expect(await coin.balanceOf(await otherAccount.getAddress())).to.equal(mintAmt);
+
+      const dataTransfer = coin.interface.encodeFunctionData('transfer', [relayer.address, mintAmt]);
+      await forwarder.connect(relayer).execute(
+        await genMetaTxnCompleteReq(
+          otherAccount,
+          await coin.getAddress(),
+          dataTransfer,
+          forwarder,
+          validTime
+        ))
+
+      expect(await coin.balanceOf(await relayer.getAddress())).to.equal(mintAmt);
+    });
 
   });
 
